@@ -45,313 +45,211 @@ Before proceeding, ensure the following tools are installed on your local machin
 
 -----
 
-### 1\. Provision the AKS Cluster
+## 💻 Workflow 1: Local Development & Testing
 
-Use `ksctl` to create a new AKS cluster.
+This workflow allows you to run the entire application stack on your local machine using Docker.
+
+### Step 1: Build OCI Artifacts
 
 ```bash
-ksctl create-cluster azure --name=application --version=1.29
+bsf init
+
+bsf oci pkgs --platform=linux/amd64 --tag=prod-v1 --push --dest-creds {DOCKERHUB_USERNAME}:{DOCKERHUB_TOKEN}
+
+KO_DOCKER_REPO={DOCKERHUB_USERNAME}/devops-project KO_DEFAULTBASEIMAGE={DOCKERHUB_USERNAME}/devops-proj:base ko build --bare -t v1 .
 ```
 
-### 2\. Configure kubectl Context
-
-Switch your local `kubectl` context to point to the newly created cluster and export the Kubeconfig path.
+### Step 2: Run Dependencies and Application using Docker
 
 ```bash
-ksctl switch-cluster --provider azure --region eastus --name devops-project
-export KUBECONFIG="/Users/your-user/.ksctl/kubeconfig" # Adjust the path accordingly
+docker run -d --name grafana -p 3000:3000 grafana/grafana
+
+docker run -d --name prometheus -p 9090:9090 -v $(pwd)/prometheus.yml:/etc/prometheus/prometheus.yml prom/prometheus
+
+docker run --name local-postgres -e POSTGRES_USER=myuser -e POSTGRES_PASSWORD=mypassword -e POSTGRES_DB=mydb -p 5432:5432 -d postgres
+
+docker exec -it local-postgres psql -U myuser -d mydb -c "CREATE TABLE goals (id SERIAL PRIMARY KEY, goal_name TEXT NOT NULL);"
+
+docker run -d \
+  --platform=linux/amd64 \
+  -p 8080:8080 \
+  -e DB_USERNAME=myuser \
+  -e DB_PASSWORD=mypassword \
+  -e DB_HOST=host.docker.internal \
+  -e DB_PORT=5432 \
+  -e DB_NAME=mydb \
+  -e SSL=disable \
+  {YOUR_APP_IMAGE_URL}
 ```
 
-### 3\. Install Core Cluster Services
+-----
 
-Deploy the essential operators and services that form the foundation of the platform.
+## 🚀 Workflow 2: Full Deployment to AWS EKS
 
-#### 3.1. Cert-Manager (for TLS)
+This workflow provisions cloud infrastructure and deploys the application stack to a managed Kubernetes cluster.
 
-Install cert-manager and configure it to work with the Gateway API.
+### Step 1: Environment Setup
 
 ```bash
-# Install cert-manager components
-kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.15.3/cert-manager.yaml
-
-# Wait for pods to be ready
-kubectl wait --for=condition=Available deployment --timeout=300s -n cert-manager --all
-
-# Edit the deployment to enable Gateway API integration
-kubectl edit deployment cert-manager -n cert-manager
-# In the editor, find the 'args' section for the container and add:
-# - --enable-gateway-api
-
-# Restart the deployment to apply the changes
-kubectl rollout restart deployment cert-manager -n cert-manager
+git clone https://github.com/kartik-paliwa1/end-to-end-devops-project.git
+cd end-to-end-devops-project
 ```
 
-#### 3.2. Kube-Prometheus-Stack (for Observability)
-
-Install Prometheus and Grafana for monitoring using the community Helm chart.
+### Step 2: Configure Cloud Credentials
 
 ```bash
-# Add the Prometheus community Helm repository
+aws configure
+ksctl cred
+```
+
+### Step 3: Create and Configure EKS Cluster
+
+```bash
+ksctl create cluster aws --name devops-project --region us-west-2 --version 1.29
+aws eks update-kubeconfig --region us-west-2 --name devops-project-ksctl-managed
+```
+
+### Step 4: Install Core Kubernetes Components
+
+#### NGINX Gateway Fabric
+
+```bash
+kubectl apply -f https://github.com/nginxinc/nginx-gateway-fabric/releases/download/v2.0.0/nginx-gateway.yaml
+```
+
+#### cert-manager
+
+```bash
+helm repo add jetstack https://charts.jetstack.io
+helm repo update
+helm install \
+  cert-manager jetstack/cert-manager \
+  --namespace cert-manager \
+  --create-namespace \
+  --version v1.15.1 \
+  --set installCRDs=true
+```
+
+#### Kube Prometheus Stack
+
+```bash
 helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
 helm repo update
-
-# Install the kube-prometheus-stack in a dedicated namespace
 helm install kube-prometheus-stack prometheus-community/kube-prometheus-stack --namespace monitoring --create-namespace
 ```
 
-#### 3.3. NGINX Gateway Fabric (for Ingress)
-
-Install the NGINX Gateway Fabric, which implements the Kubernetes Gateway API.
-
-```bash
-# Install the Gateway API CRDs
-kubectl kustomize "https://github.com/nginxinc/nginx-gateway-fabric/config/crd/gateway-api/standard?ref=v1.3.0" | kubectl apply -f -
-
-# Install the NGINX Gateway Fabric using Helm
-helm install ngf oci://ghcr.io/nginxinc/charts/nginx-gateway-fabric --create-namespace -n nginx-gateway
-```
-
-#### 3.4. CloudNativePG Operator (for Database)
-
-Install the CloudNativePG operator to manage PostgreSQL clusters within Kubernetes.
+#### CloudNativePG (PostgreSQL Operator)
 
 ```bash
 kubectl apply --server-side -f https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/release-1.23/releases/cnpg-1.23.1.yaml
 ```
 
-### 4\. Deploy and Configure the PostgreSQL Database
-
-With the operator installed, create a resilient, three-instance PostgreSQL cluster.
-
-#### 4.1. Create the Database Cluster
-
-Apply the `Cluster` custom resource definition to provision the database.
+#### Argo CD
 
 ```bash
-cat << EOF | kubectl apply -f -
-apiVersion: postgresql.cnpg.io/v1
-kind: Cluster
+kubectl create namespace argocd
+kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+kubectl patch configmap argocd-cmd-params-cm -n argocd --patch '{"data":{"server.insecure":"true"}}'
+kubectl rollout restart deployment argocd-server -n argocd
+```
+
+### Step 5: Configure `ClusterIssuer` for TLS Certificates
+
+```bash
+nano letsencrypt-prod-issuer.yaml
+```
+
+```yaml
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
 metadata:
-  name: my-postgresql
-  namespace: default
+  name: letsencrypt-prod
 spec:
-  instances: 3
-  storage:
-    size: 1Gi
-  bootstrap:
-    initdb:
-      database: goals_database
-      owner: goals_user
-      secret:
-        name: my-postgresql-credentials
-EOF
+  acme:
+    email: your-email@example.com
+    server: https://acme-v02.api.letsencrypt.org/directory
+    privateKeySecretRef:
+      name: letsencrypt-prod-private-key
+    solvers:
+    - http01:
+        gatewayHTTPRoute:
+          parentRefs:
+            - name: app-gateway
+              namespace: default
 ```
 
-#### 4.2. Manage Database Credentials
-
-Create the initial secret and then update the user's password within the database.
-
 ```bash
-# Create the secret for the database user
-kubectl create secret generic my-postgresql-credentials --from-literal=password='new_password' --from-literal=username='goals_user' --dry-run=client -o yaml | kubectl apply -f -
-
-# Update the password inside the running PostgreSQL instance
-kubectl exec -it my-postgresql-1 -- psql -U postgres -c "ALTER USER goals_user WITH PASSWORD 'new_password';"
+kubectl apply -f letsencrypt-prod-issuer.yaml
 ```
 
-#### 4.3. Initialize the Application Table
-
-Port-forward to the primary database pod and create the `goals` table.
+### Step 6: Deploy and Configure the Database
 
 ```bash
-# Port-forward the primary PostgreSQL pod
-kubectl port-forward my-postgresql-1 5432:5432 &
+kubectl apply -f pg_cluster.yaml
+kubectl get pods --watch
+kubectl port-forward svc/my-postgresql-rw 5432:5432
+```
 
-# Execute the CREATE TABLE statement
-PGPASSWORD='new_password' psql -h 127.0.0.1 -U goals_user -d goals_database -c "
+```bash
+APP_PASSWORD=$(kubectl get secret my-postgresql-app -o jsonpath='{.data.password}' | base64 -d)
+
+PGPASSWORD=$APP_PASSWORD psql -h 127.0.0.1 -U goals_user -d goals_database -c "
 CREATE TABLE goals (
     id SERIAL PRIMARY KEY,
     goal_name VARCHAR(255) NOT NULL
 );
 "
-# Kill the port-forward process
-kill $!
 ```
 
-### 5\. Deploy the Go Application
-
-Deploy the main application to the cluster.
-
-#### 5.1. Create Application Secrets
-
-Create a Kubernetes secret that the application deployment will use to connect to the database. The username and password must be Base64 encoded.
-
-```bash
-# The values 'Z29hbHNfdXNlcg==' and 'bmV3X3Bhc3N3b3Jk' are the Base64 encodings of 'goals_user' and 'new_password' respectively.
-cat << EOF | kubectl apply -f -
-apiVersion: v1
-kind: Secret
-metadata:
-  name: postgresql-credentials
-type: Opaque
-data:
-  password: bmV3X3Bhc3N3b3Jk
-  username: Z29hbHNfdXNlcg==
-EOF
-```
-
-#### 5.2. Apply Deployment Manifests
-
-Apply the `deploy.yaml` file, which contains the Kubernetes Deployment, Service, and Gateway resources for the application.
+### Step 7: Deploy the Application
 
 ```bash
 kubectl apply -f deploy/deploy.yaml
 ```
 
-### 6\. Install and Configure Argo CD for GitOps
+### Step 8: Access Services
 
-Deploy Argo CD to manage application deployments declaratively.
-
-#### 6.1. Install Argo CD
+#### Argo CD
 
 ```bash
-kubectl create namespace argocd
-kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+ARGO_PASSWORD=$(kubectl get secret --namespace argocd argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 --decode) && echo $ARGO_PASSWORD
+
+kubectl port-forward svc/argocd-server -n argocd 8080:443
+
+ssh -i /path/to/your/key.pem -L 8080:localhost:8080 user@your-server-ip
 ```
 
-#### 6.2. Configure and Access Argo CD
-
-For this demonstration, Argo CD is configured to run in insecure mode. **This is not recommended for production environments.**
+#### Grafana
 
 ```bash
-# Patch the configmap to allow insecure server access
-kubectl patch configmap argocd-cmd-params-cm -n argocd --patch '{"data":{"server.insecure":"true"}}'
+GRAFANA_PASSWORD=$(kubectl get secret --namespace monitoring kube-prometheus-stack-grafana -o jsonpath="{.data.admin-password}" | base64 --decode) && echo $GRAFANA_PASSWORD
 
-# Restart the Argo CD server to apply the changes
-kubectl rollout restart deployment argocd-server -n argocd
+kubectl port-forward svc/kube-prometheus-stack-grafana -n monitoring 3000:80
 
-# Retrieve the initial admin password
-kubectl get secret --namespace argocd argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 --decode ; echo
+ssh -i /path/to/your/key.pem -L 3000:localhost:3000 user@your-server-ip
 ```
 
-### 7\. Configure Network Routing via Gateway API
-
-Expose the Argo CD dashboard to external traffic using a Gateway and HTTPRoute.
-
-```bash
-# Apply the HTTPRoute for Argo CD
-kubectl apply -f route-argo.yaml
-
-# Apply the ReferenceGrant to allow the Gateway in the nginx-gateway namespace
-# to reference a Service in the argocd namespace.
-kubectl apply -f referencegrant
-```
-
------
-
-## Part III: Verification and Usage
-
-After completing the deployment steps, verify that all services are accessible.
-
-### Accessing the Grafana Dashboard
-
-Get Admin Password:
-
-```bash
-kubectl get secret --namespace monitoring kube-prometheus-stack-grafana -o jsonpath="{.data.admin-password}" | base64 --decode ; echo
-```
-
-Port-forward to the Grafana Service:
-
-```bash
-kubectl port-forward svc/kube-prometheus-stack-grafana 3000:80 -n monitoring
-```
-
-Access Grafana at `http://localhost:3000` and log in with the username `admin` and the retrieved password.
-
-### Accessing the Argo CD and Application Dashboards
-
-Get the External IP of the Gateway:
-
-```bash
-kubectl get gateway -n nginx-gateway
-```
-
-Look for the external IP address assigned to the `ngf` gateway.
-
-  * **Access Argo CD**: Navigate to the external IP address in your browser. Log in with the username `admin` and the password retrieved in step 6.2.
-  * **Access the Go Application**: The application will be available at the same external IP on a specific path defined in `deploy/deploy.yaml`.
-
------
-
-## Part IV: Performance and Load Testing
-
-Use `k6` to run a simple load test against the deployed application endpoint.
-
-### Update the Test Script
-
-Open the `load.js` file and replace the placeholder URL with the actual external IP address of your application gateway.
-
-### Execute the Load Test
+### Step 9: Load Testing
 
 ```bash
 k6 run load.js
 ```
 
-Observe the output in your terminal and monitor the corresponding metrics in the Grafana dashboard to see how the system behaves under load.
-
 -----
 
-## Challenges Encountered & Key Considerations
+## ⚠️ Challenges faced while creating this project:
 
-Deploying a complex, multi-component system like this presents several challenges and highlights important architectural considerations.
+  * **Challenge 1: `bsf` Tooling Issues**
 
-1.  **Tooling Complexity and Abstraction**
-    The project leverages high-level tools like `ksctl` for cluster creation and `ko` for building Go applications. While these tools dramatically simplify common workflows and reduce boilerplate configuration, they introduce their own layer of abstraction. When issues arise, debugging may require understanding the inner workings of these tools, not just the underlying technologies (like the Azure API or Docker image layers) they abstract away. This trade-off between convenience and control is a central theme in modern cloud-native development.
+      * **Problem:** The `bsf` (BuildSafe) tool is no longer actively maintained and may not support newer Go versions or dependencies.
+      * **Solution:** Transition to using **Chainguard Images** or a multi-stage `Dockerfile` to build minimal, secure container images for the Go application. This provides better security posture and long-term support.
 
-2.  **The Dev/Prod Parity Gap**
-    A significant consideration is the inherent difference between the local Docker-based environment and the full Kubernetes deployment. The local setup uses a single, standalone PostgreSQL container, whereas the cloud environment uses a three-node, operator-managed, high-availability cluster via CloudNativePG. This discrepancy means that challenges related to stateful application behavior, network partitioning, leader election, and Kubernetes-native routing (via the Gateway API) cannot be replicated or tested locally. The local environment is suitable for rapid, inner-loop functional testing of the application code itself, but the Kubernetes environment is where integration, resilience, and operational issues must be validated.
+  * **Challenge 2: NGINX Gateway Controller Failure**
 
-3.  **Networking and Integration Complexity**
-    The most intricate and error-prone aspects of this stack often reside at the integration points between components. A primary example is the interaction between the NGINX Gateway Fabric, cert-manager, and the application services. Correctly configuring the `Gateway`, `HTTPRoute`, and `ReferenceGrant` resources to allow secure, cross-namespace traffic routing is non-trivial. A `ReferenceGrant` is required to explicitly permit the Gateway in the `nginx-gateway` namespace to forward traffic to a Service in the `default` or `argocd` namespace. Debugging issues in this area often involves inspecting the status and events of multiple, interconnected Custom Resources (`Gateway`, `HTTPRoute`, `Certificate`, `Issuer`, `Service`) to trace the flow of configuration and identify the point of failure.
+      * **Problem:** The `Gateway` resource did not receive an external IP address. The `nginx-gateway-fabric` pods were in a `CrashLoopBackOff` state.
+      * **Solution:** Completely uninstalled the broken deployment and reinstalled it using the single, official manifest (`kubectl apply -f https://.../nginx-gateway.yaml`), which ensures all CRDs are created correctly before the controller starts.
 
-4.  **Security: From Tutorial to Production**
-    This project's configuration includes several shortcuts for ease of setup that are **not suitable for a production environment**. It provides a foundational security posture but requires significant hardening.
+  * **Challenge 3: `cert-manager` Fails to Issue Certificates**
 
-      * **Insecure Secrets Handling**: The use of `kubectl create secret --from-literal` exposes sensitive data like passwords directly in the shell's history.
-      * **Insecure Argo CD Access**: The command `kubectl patch configmap... --patch '{"data":{"server.insecure":"true"}}'` disables TLS for the Argo CD server, exposing login credentials and session data over the network.
-
-    A "graduation path" from this tutorial to a production-ready deployment must include the following hardening steps:
-
-    >   - **Secrets Management**: Integrate a dedicated secrets management solution like HashiCorp Vault, Azure Key Vault, or the Kubernetes External Secrets Operator to inject secrets into pods securely, avoiding storing them as plaintext in Kubernetes `Secret` objects.
-    >   - **Secure Argo CD**: Remove the `server.insecure` patch. Instead, configure the NGINX Gateway to terminate TLS for the Argo CD route, using a valid certificate issued by cert-manager.
-    >   - **Network Policies**: Implement Kubernetes `NetworkPolicy` resources to enforce a "zero-trust" networking model. Policies should be created to explicitly allow traffic from the application pods to the database pods while denying all other non-essential pod-to-pod communication.
-
------
-
-## Cleanup and Teardown
-
-To avoid incurring ongoing cloud costs, destroy all the resources created during this project.
-
-### Destroy Cloud Resources:
-
-Use `ksctl` to delete the entire AKS cluster and its associated resources.
-
-```bash
-ksctl delete-cluster azure --name=application
-```
-
-### Destroy Local Resources:
-
-Stop and remove all Docker containers and images created during the local setup.
-
-```bash
-# Stop all running containers
-docker stop $(docker ps -a -q)
-
-# Remove all containers
-docker rm $(docker ps -a -q)
-
-# Remove the container images (replace with your image names)
-docker rmi {YOUR_DOCKERHUB_USERNAME}/devops-project:v1 grafana/grafana prom/prometheus postgres
-```
+      * **Problem:** `kubectl get certificate` returned `No resources found` even though the `Gateway` was annotated correctly.
+      * **Solution:** Uninstalled the broken Helm release and reinstalled a newer, compatible version of `cert-manager` (`v1.15.1` or higher) that has built-in support for the Gateway API.
