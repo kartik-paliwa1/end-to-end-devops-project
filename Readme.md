@@ -355,9 +355,3 @@ docker rm $(docker ps -a -q)
 # Remove the container images (replace with your image names)
 docker rmi {YOUR_DOCKERHUB_USERNAME}/devops-project:v1 grafana/grafana prom/prometheus postgres
 ```
-
------
-
-## Works Cited
-
-kubesimplify/devops-project: This is the repo for DevOps ... - GitHub, accessed on July 15, 2025, [https://github.com/kubesimplify/devops-project](https://github.com/kubesimplify/devops-project)
