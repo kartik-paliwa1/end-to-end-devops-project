@@ -253,3 +253,7 @@ k6 run load.js
 
       * **Problem:** `kubectl get certificate` returned `No resources found` even though the `Gateway` was annotated correctly.
       * **Solution:** Uninstalled the broken Helm release and reinstalled a newer, compatible version of `cert-manager` (`v1.15.1` or higher) that has built-in support for the Gateway API.
+   
+-----
+Learned from: Saiyam Pathak sir
+ 
