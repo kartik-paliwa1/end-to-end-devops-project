@@ -45,7 +45,7 @@ Before proceeding, ensure the following tools are installed on your local machin
 
 -----
 
-## 💻 Workflow 1: Local Development & Testing
+## Workflow 1: Local Development & Testing
 
 This workflow allows you to run the entire application stack on your local machine using Docker.
 
@@ -84,7 +84,7 @@ docker run -d \
 
 -----
 
-## 🚀 Workflow 2: Full Deployment to AWS EKS
+## Workflow 2: Full Deployment to AWS EKS
 
 This workflow provisions cloud infrastructure and deploys the application stack to a managed Kubernetes cluster.
 
@@ -237,7 +237,7 @@ k6 run load.js
 
 -----
 
-## ⚠️ Challenges faced while creating this project:
+## Challenges faced while creating this project:
 
   * **Challenge 1: `bsf` Tooling Issues**
 
