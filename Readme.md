@@ -1,8 +1,6 @@
-# End-to-End DevOps: A Cloud-Native Go Application on Kubernetes
+# End-to-End DevOps Project
 
-This repository provides a comprehensive, end-to-end implementation of a modern cloud-native application stack. The project demonstrates the complete lifecycle of a Go-based application, from local development and containerization to a full production-grade deployment on a Kubernetes cluster. It serves as a prescriptive template for building, deploying, and managing robust, scalable, and observable applications.
-
-The architecture emphasizes modern DevOps and GitOps principles, utilizing a curated, best-in-class toolchain. Key features include automated infrastructure provisioning, declarative application deployment with Argo CD, high-availability database management with the CloudNativePG operator, advanced traffic routing via the NGINX Gateway Fabric, and a comprehensive observability stack powered by Prometheus and Grafana.
+This repository provides a comprehensive, end-to-end implementation of a modern cloud-native application stack. 
 
 -----
 
