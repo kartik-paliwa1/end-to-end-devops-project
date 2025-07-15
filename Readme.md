@@ -4,19 +4,6 @@ This repository provides a comprehensive, end-to-end implementation of a modern 
 
 -----
 
-## Architecture and Technology Stack
-
-The system architecture is designed for resilience, scalability, and maintainability within a Kubernetes environment. At its core is a simple Go application that interacts with a PostgreSQL database. This entire stack is deployed onto an Azure Kubernetes Service (AKS) cluster.
-
-The logical flow of the system is as follows:
-
-  * User traffic is directed to the **NGINX Gateway Fabric**, which serves as the entry point to the cluster and manages routing to backend services.
-  * The **Go application**, containerized and deployed within Kubernetes, handles the core business logic.
-  * The application's state is persisted in a high-availability **PostgreSQL cluster**, managed declaratively by the **CloudNativePG operator**. This operator handles tasks such as provisioning, failover, and backups.
-  * The **Argo CD** platform continuously monitors the application's Git repository, ensuring that the live state of the Kubernetes deployment matches the desired state defined in the configuration files (GitOps).
-  * The **kube-prometheus-stack** scrapes metrics from the application, Kubernetes components, and other services. These metrics are then visualized in **Grafana** dashboards, providing deep insight into system health and performance.
-  * TLS certificates for all public-facing endpoints are automatically provisioned and managed by **cert-manager**, ensuring secure communication.
-
 ### Core Technologies and Roles
 
 The project integrates a suite of powerful open-source tools, each chosen for a specific role in the application lifecycle. The following table provides a summary of the core technologies used.
