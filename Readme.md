@@ -2,6 +2,9 @@
 
 This repository provides a comprehensive, end-to-end implementation of a modern cloud-native application stack. 
 
+![ent-to-end dev](https://github.com/user-attachments/assets/8a320554-d58d-457d-8782-5237f8ace50d)
+
+
 -----
 
 ### Core Technologies and Roles
